@@ -423,6 +423,12 @@ def main():
         return 2
 
     print(f"modo: {'APLICAR reposts' if APPLY else 'DRY-RUN (solo listar)'} | límite={LIMIT} | delay={DELAY}s")
+    print(
+        "alcance: "
+        + ("solo publicaciones originales" if SKIP_RETWEETS else "incluye retweets de otras cuentas")
+        + " | respuestas: "
+        + ("omitidas" if SKIP_REPLIES else "incluidas")
+    )
     if MATCH or EXCLUDE:
         print(f"filtros de texto: incluir={MATCH or '—'} | excluir={EXCLUDE or '—'}")
 
@@ -434,7 +440,7 @@ def main():
             print(f"  error con {u}: {e}")
 
     if SKIPPED_RT:
-        print(f"\n({SKIPPED_RT} retweets ignorados: el autor original no es el buscado)")
+        print(f"\n({SKIPPED_RT} retweets de otras cuentas ignorados; X_SKIP_RETWEETS=0 para incluirlos)")
     if SKIPPED_KW:
         print(f"({SKIPPED_KW} descartados por X_MATCH/X_EXCLUDE)")
 

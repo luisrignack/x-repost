@@ -2,8 +2,16 @@
 # xrepost — repostea posts de usuarios concretos en un rango de fechas.
 #
 # Uso:
-#   ./xrepost.sh                          # interactivo (pregunta usuarios y fechas)
+#   ./xrepost.sh                          # interactivo (pregunta usuarios, fechas y alcance)
 #   ./xrepost.sh <usuarios> <desde> [hasta]
+#
+# Fechas (modo interactivo): campo AAAA-MM-DD con avance automático (los guiones
+# se insertan solos y al escribir el octavo dígito se acepta). Enter acepta el
+# valor entre corchetes; se valida el calendario y que desde <= hasta.
+#
+# Retweets: en modo interactivo se pregunta si se incluyen los retweets que las
+# cuentas hayan hecho de otras cuentas. Por defecto solo se consideran las
+# publicaciones originales (X_SKIP_RETWEETS=1).
 #
 # Opciones:
 #   --csv RUTA          exportar el listado a CSV
@@ -33,6 +41,151 @@ export X_HISTORY="${X_HISTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/xrepost/his
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# --- entrada interactiva ----------------------------------------------------
+
+# Valida una fecha AAAA-MM-DD real (incluye meses y días del calendario).
+valid_date() {
+  local d="$1" y m day
+  [[ "$d" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]] || return 1
+  y="${BASH_REMATCH[1]}"
+  m="${BASH_REMATCH[2]}"
+  day="${BASH_REMATCH[3]}"
+  (( 10#$y >= 1900 && 10#$y <= 2199 )) || return 1
+  (( 10#$m >= 1 && 10#$m <= 12 )) || return 1
+  (( 10#$day >= 1 && 10#$day <= 31 )) || return 1
+  [ "$(date -d "$d" +%F 2>/dev/null)" = "$d" ]
+}
+
+# Máscara AAAA-MM-DD para dibujar el campo mientras se escribe.
+format_mask() {
+  local d="$1" y="${1:0:4}" m="${1:4:2}" day="${1:6:2}"
+  while [ ${#y} -lt 4 ]; do y+="_"; done
+  while [ ${#m} -lt 2 ]; do m+="_"; done
+  while [ ${#day} -lt 2 ]; do day+="_"; done
+  printf '%s-%s-%s' "$y" "$m" "$day"
+}
+
+# Campo de fecha con avance automático. $1 = etiqueta, $2 = valor por defecto.
+# Los guiones se insertan solos; al completar 8 dígitos se valida y se acepta.
+# Enter acepta el valor por defecto (si lo hay) o confirma una fecha completa.
+# Deja el resultado en READ_DATE; devuelve 1 si no hay entrada (EOF).
+read_date() {
+  local label="$1" def="${2:-}" digits="" ch msg="" tty=0 drain=0 skip_def=0
+  if [ -t 0 ] && [ -t 1 ]; then tty=1; fi
+
+  if [ "$tty" = 0 ]; then
+    printf '  %s' "$label"
+    if [ -n "$def" ]; then printf ' [%s]' "$def"; fi
+    printf ': '
+  fi
+
+  while :; do
+    if [ "$tty" = 1 ]; then
+      printf '\r\033[K  %s' "$label"
+      if [ -n "$def" ]; then printf ' [%s]' "$def"; fi
+      printf ': %s' "$(format_mask "$digits")"
+      if [ -n "$msg" ]; then printf '  (%s)' "$msg"; fi
+    elif [ -n "$msg" ]; then
+      printf '\n  (%s)\n  %s' "$msg" "$label"
+      if [ -n "$def" ]; then printf ' [%s]' "$def"; fi
+      printf ': '
+    fi
+    msg=""
+
+    if ! IFS= read -rsn1 ch; then
+      printf '\n'
+      return 1
+    fi
+
+    case "$ch" in
+      "")
+        if [ "$skip_def" = "1" ]; then
+          skip_def=0
+          msg="escribe la fecha"
+          continue
+        fi
+        if [ -z "$digits" ] && [ -n "$def" ]; then
+          digits="${def//-/}"
+          break
+        fi
+        if [ ${#digits} -eq 8 ] && valid_date "$(format_mask "$digits")"; then
+          break
+        fi
+        msg="fecha incompleta: faltan dígitos"
+        ;;
+      [0-9])
+        skip_def=0
+        digits+="$ch"
+        ;;
+      -|/|' '|:|.)
+        ;;
+      $'\x7f'|$'\b')
+        digits="${digits%?}"
+        ;;
+      *)
+        msg="solo se admiten números"
+        ;;
+    esac
+
+    if [ ${#digits} -eq 8 ]; then
+      if valid_date "$(format_mask "$digits")"; then
+        drain=1
+        break
+      fi
+      digits=""
+      skip_def=1
+      msg="fecha no válida; vuelve a escribirla"
+    fi
+  done
+
+  READ_DATE="$(format_mask "$digits")"
+  if [ "$tty" = 1 ]; then
+    printf '\r\033[K  %s' "$label"
+    if [ -n "$def" ]; then printf ' [%s]' "$def"; fi
+    printf ': %s\n' "$READ_DATE"
+  else
+    printf '%s\n' "$READ_DATE"
+  fi
+  # Si el usuario pulsó Enter después del octavo dígito, descartarlo para que
+  # no lo consuma el siguiente campo. Tras un Enter explícito no hay nada que
+  # descartar: ese salto de línea ya lo consumió la lectura.
+  if [ "$drain" = "1" ]; then
+    IFS= read -rsn1 -t 0.15 _ 2>/dev/null || true
+  fi
+}
+
+# Pregunta el alcance: solo publicaciones originales o también retweets.
+ask_scope() {
+  local ans
+  cat <<'TXT'
+
+Alcance de las publicaciones
+  Indique qué publicaciones de las cuentas seleccionadas desea considerar:
+
+    1) Solo publicaciones originales (recomendado)
+       Se excluyen los retweets que esas cuentas hayan hecho de otras cuentas.
+
+    2) Publicaciones originales y retweets de otras cuentas
+       Se incluyen también esos retweets; al repostear, se repostea la
+       publicación original, no el retweet.
+
+TXT
+  while :; do
+    printf '  Seleccione una opción [1/2] (Enter = 1): '
+    read -r ans || ans=""
+    case "${ans:-1}" in
+      1) X_SKIP_RETWEETS=1; break ;;
+      2) X_SKIP_RETWEETS=0; break ;;
+      *) echo "  Opción no válida: escriba 1 o 2." ;;
+    esac
+  done
+  if [ "$X_SKIP_RETWEETS" = "1" ]; then
+    echo "  → Alcance: solo publicaciones originales (retweets omitidos)."
+  else
+    echo "  → Alcance: publicaciones originales y retweets de otras cuentas."
+  fi
 }
 
 MODE="repost"
@@ -126,14 +279,63 @@ if [ "$MODE" = "repost" ]; then
   else
     echo "=== xrepost ==="
     read -r -p "Usuarios (separados por coma, @ opcional): " X_USERS || X_USERS=""
-    read -r -p "Fecha desde (YYYY-MM-DD): " X_FROM || X_FROM=""
-    read -r -p "Fecha hasta (Enter = la misma): " X_TO || X_TO=""
-    X_TO="${X_TO:-$X_FROM}"
+    if [ -z "${X_USERS// /}" ]; then
+      echo "Debes indicar al menos un usuario." >&2
+      exit 1
+    fi
+
+    _today="$(date +%F)"
+    echo
+    echo "Fechas (AAAA-MM-DD): escribe los 8 dígitos seguidos; los guiones se añaden solos."
+    echo "Enter acepta el valor entre corchetes."
+    while :; do
+      if ! read_date "Fecha desde" "$_today"; then
+        echo "Entrada cancelada." >&2
+        exit 1
+      fi
+      X_FROM="$READ_DATE"
+
+      if ! read_date "Fecha hasta (Enter = la misma)" "$X_FROM"; then
+        echo "Entrada cancelada." >&2
+        exit 1
+      fi
+      X_TO="$READ_DATE"
+
+      if [[ "$X_FROM" > "$X_TO" ]]; then
+        echo "  La fecha inicial ($X_FROM) es posterior a la final ($X_TO). Inténtalo de nuevo."
+        continue
+      fi
+      break
+    done
+
+    if [ -n "${X_SKIP_RETWEETS:-}" ]; then
+      if [ "$X_SKIP_RETWEETS" = "0" ]; then
+        echo
+        echo "  Alcance (X_SKIP_RETWEETS=0): se incluyen retweets de otras cuentas."
+      else
+        echo
+        echo "  Alcance (X_SKIP_RETWEETS=1): solo publicaciones originales."
+      fi
+    else
+      ask_scope
+    fi
+
     export X_USERS X_FROM X_TO
   fi
 
   if [ -z "${X_USERS:-}" ] || [ -z "${X_FROM:-}" ]; then
     echo "Faltan usuarios o fecha." >&2
+    exit 1
+  fi
+
+  for _date in "$X_FROM" "$X_TO"; do
+    if ! valid_date "$_date"; then
+      echo "Fecha no válida: '$_date'. Formato esperado: AAAA-MM-DD." >&2
+      exit 1
+    fi
+  done
+  if [[ "$X_FROM" > "$X_TO" ]]; then
+    echo "La fecha inicial ($X_FROM) es posterior a la final ($X_TO)." >&2
     exit 1
   fi
 fi
