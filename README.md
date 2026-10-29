@@ -46,14 +46,16 @@ Por defecto **no repostea nada**: primero enseña la lista (modo *dry-run*). Sol
 ~/Downloads/x-repost/
 ├── xrepost.sh                 # interfaz: pregunta usuarios/fechas o recibe argumentos
 ├── xrepost.py                 # lógica: búsqueda, filtrado, repost y verificación
+├── xrepost_accounts.py        # cuentas recordadas, ranking y prompt con sugerencias
 ├── README.md                  # este documento (texto, se actualiza primero)
 └── xrepost-documentacion.pdf  # este mismo documento en PDF (14 páginas)
 ```
 
 - **`xrepost.sh`** es un envoltorio Bash. Recoge los datos, los pasa como variables de entorno y ejecuta `browser-use < xrepost.py`.
 - **`xrepost.py`** se ejecuta *dentro* del harness. No importa `browser-use`: las funciones (`goto_url`, `js`, `wait_for_load`, …) ya están disponibles en el entorno de ejecución.
+- **`xrepost_accounts.py`** guarda las cuentas usadas, calcula las coincidencias y dibuja el autocompletado del modo interactivo. El panel web usa el mismo archivo.
 
-El historial y los estados no viven en la carpeta, sino en `~/.local/state/xrepost/history.jsonl` (una línea JSON por acción). Se puede cambiar con `X_HISTORY`; los `--csv` / `--md` se guardan donde indiques.
+El historial y los estados no viven en la carpeta, sino en `~/.local/state/xrepost/history.jsonl` (una línea JSON por acción). Se puede cambiar con `X_HISTORY`; los `--csv` / `--md` se guardan donde indiques. Las cuentas recordadas se guardan en `~/.local/state/xrepost/accounts.json` (cambiable con `X_ACCOUNTS`).
 
 ---
 
@@ -163,6 +165,7 @@ cd ~/Downloads/x-repost
 
 ```
 === xrepost ===
+  ↑/↓ elegir · Tab completar · Enter aceptar · Esc cerrar
 Usuarios (separados por coma, @ opcional): kubernetesio, docker
 
 Fechas (AAAA-MM-DD): escribe los 8 dígitos seguidos; los guiones se añaden solos.
@@ -183,6 +186,8 @@ Alcance de las publicaciones
   Seleccione una opción [1/2] (Enter = 1): 2
   → Alcance: publicaciones originales y retweets de otras cuentas.
 ```
+
+Al escribir una cuenta, el campo muestra un desplegable con las cuentas usadas antes que coinciden con lo tecleado. Las coincidencias se ordenan por tipo (exacta, empieza por, contiene), luego por uso reciente y frecuencia. `↑`/`↓` mueve la selección, `Tab` completa el token y añade una coma para la siguiente cuenta, `Enter` acepta lo escrito o la sugerencia seleccionada, y `Esc` cierra el desplegable. Las cuentas se recuerdan al ejecutar la búsqueda, también cuando se pasan como argumentos.
 
 Las fechas se escriben en un campo enmascarado con avance automático: al teclear `20261020` se ve `2026-10-20`, los guiones se insertan solos y no hace falta pulsar Enter. Al octavo dígito se valida el calendario (rechaza `2026-02-30`, mes 13, etc.) y se acepta; si la fecha no es válida, se limpia el campo y se pide de nuevo. `Enter` sobre un campo vacío toma el valor entre corchetes (hoy para «desde», la fecha inicial para «hasta»). Si la fecha inicial queda después de la final, se vuelven a pedir ambas.
 
@@ -216,7 +221,7 @@ También se puede pasar todo por variables de entorno, sin argumentos:
 X_USERS=kubernetesio X_FROM=2026-10-27 X_MATCH=cloud ./xrepost.sh
 ```
 
-En modo con argumentos o por variables no se pregunta nada: el alcance queda en «solo originales» salvo que definas `X_SKIP_RETWEETS=0`. Las fechas se validan igualmente y un valor imposible termina con un error claro antes de abrir Chrome.
+En modo con argumentos o por variables no se pregunta nada: el alcance queda en «solo originales» salvo que definas `X_SKIP_RETWEETS=0`. Las fechas se validan igualmente y un valor imposible termina con un error claro antes de abrir Chrome. Las cuentas usadas por argumentos o por `X_USERS` también se guardan para las próximas sugerencias.
 
 ### 5.4 Exportar el listado
 
@@ -271,6 +276,7 @@ Solo deshace reposts **hechos por la herramienta** (no los que ya estaban antes)
 | `X_EXCLUDE` | — | Palabras separadas por comas; si el post contiene **alguna**, se descarta |
 | `X_FORCE` | `0` | `1` = ignorar el historial y volver a procesar lo ya reposteado |
 | `X_HISTORY` | `~/.local/state/xrepost/history.jsonl` | Ruta del historial JSONL |
+| `X_ACCOUNTS` | junto al historial (`.../accounts.json`) | Ruta de las cuentas recordadas para el autocompletado |
 | `X_CSV` / `X_MD` | — | Exportación; normalmente se usan los flags `--csv` / `--md` |
 | `BU_CDP_URL` | `http://127.0.0.1:9222` | Endpoint de Chrome |
 
@@ -293,7 +299,7 @@ Solo deshace reposts **hechos por la herramienta** (no los que ya estaban antes)
 
 ### 7.2 Recorrido de una ejecución
 
-**Paso 1 — el wrapper recoge los datos.** `xrepost.sh` interpreta los flags (`--csv`, `--md`, `--force`, `--undo-last`, …), toma usuarios y fechas de los argumentos (o de `X_USERS`/`X_FROM`, o los pregunta) y los exporta como variables de entorno. En modo interactivo, la fecha es un campo enmascarado que inserta los guiones y valida el calendario; después se pregunta el alcance (solo originales o también retweets) y la respuesta se traduce a `X_SKIP_RETWEETS`. Las fechas recibidas por argumentos o variables también se validan antes de navegar. Después ejecuta:
+**Paso 1 — el wrapper recoge los datos.** `xrepost.sh` interpreta los flags (`--csv`, `--md`, `--force`, `--undo-last`, …), toma usuarios y fechas de los argumentos (o de `X_USERS`/`X_FROM`, o los pregunta) y los exporta como variables de entorno. En modo interactivo delega la entrada de usuarios en `xrepost_accounts.py`, que lee las cuentas recordadas y el historial, dibuja las coincidencias mientras se escribe y devuelve la lista elegida. En modo interactivo, la fecha es un campo enmascarado que inserta los guiones y valida el calendario; después se pregunta el alcance (solo originales o también retweets) y la respuesta se traduce a `X_SKIP_RETWEETS`. Las fechas recibidas por argumentos o variables también se validan antes de navegar. Después ejecuta:
 
 ```bash
 exec browser-use < xrepost.py
@@ -472,6 +478,7 @@ Todo lo siguiente se probó con la cuenta real, dejándola sin cambios (donde se
 14. **Modos sin navegador**: `--history` lee el JSONL y sale sin abrir Chrome; `--undo-last` sin candidatos tampoco navega.
 15. **Fechas con avance automático** (entrada simulada): `20261020` se mostró como `2026-10-20`; Enter tomó el valor entre corchetes; `20261340` y `2026-02-30` se rechazaron con aviso y se volvió a pedir; un rango invertido reabrió ambas fechas.
 16. **Pregunta de alcance** (entrada simulada): opción 1 → `X_SKIP_RETWEETS=1`; opción 2 → `0`; Enter → `1`; con `X_SKIP_RETWEETS=0` ya definida no se preguntó y se informó del alcance.
+17. **Autocompletado de cuentas** (entrada simulada con PTY): se sembraron cuentas, se escribió un prefijo, se eligió con `↓`/`Enter`, se completó con `Tab`, se encadenaron dos cuentas y se canceló con `Ctrl-C`; el valor devuelto fue el esperado y `accounts.json` se actualizó. Las pruebas de ranking cubren coincidencia exacta, prefijo, subcadena, recencia, frecuencia y exclusión de cuentas ya usadas en el mismo campo.
 17. **Validación sin interacción**: `./xrepost.sh u1 2026-13-40` termina con «Fecha no válida» y código 1, sin abrir Chrome.
 18. **Resumen de alcance**: la cabecera de cada ejecución muestra `alcance: solo publicaciones originales | respuestas: omitidas` (o la variante elegida).
 
