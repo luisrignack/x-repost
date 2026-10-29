@@ -41,13 +41,32 @@ python3 web/app.py --verbose          # registrar peticiones HTTP
 python3 web/app.py --token mi-token   # token fijo (solo para pruebas locales)
 ```
 
-También se puede cambiar el motor, el historial y la carpeta de ejecuciones:
+También se puede cambiar el motor, el historial, las cuentas recordadas y la
+carpeta de ejecuciones:
 
 ```bash
 python3 web/app.py --engine ./xrepost.sh \
   --history ~/.local/state/xrepost/history.jsonl \
+  --accounts ~/.local/state/xrepost/accounts.json \
   --runs ./web/.runs
 ```
+
+## Autocompletado de cuentas
+
+El campo **Cuentas** sugiere las cuentas usadas antes, tanto desde el panel como
+desde el CLI. Las coincidencias se actualizan al escribir, se ordenan por
+coincidencia (exacta, prefijo, subcadena), uso reciente y frecuencia, y se
+pueden elegir con el ratón o con el teclado:
+
+- `↑` / `↓` mueven la selección.
+- `Enter` acepta la sugerencia resaltada.
+- `Tab` completa la cuenta resaltada y añade una coma para la siguiente.
+- `Esc` cierra el desplegable.
+
+Las cuentas se guardan en `~/.local/state/xrepost/accounts.json` (o en la ruta
+de `X_ACCOUNTS` / `--accounts`), junto al historial. El panel registra la cuenta
+en cuanto se previsualiza una búsqueda y reutiliza el mismo archivo que el CLI.
+Al arrancar, el servidor lo indica en la línea `Cuentas:`.
 
 ## Flujo
 
@@ -95,7 +114,8 @@ python3 -m unittest -v
 
 Comprueban autenticación, comprobaciones de `Host`/`Origin`, validación de
 fechas y parámetros, previsualización, exportaciones, confirmación, lista exacta
-aplicada, historial, deshacer, bloqueo de una sola ejecución y cancelación.
+aplicada, historial, deshacer, bloqueo de una sola ejecución, cancelación y
+sugerencias de cuentas (registro al previsualizar, ranking y exclusión).
 
 ## Límites actuales
 

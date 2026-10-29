@@ -388,6 +388,35 @@ class WebTest(unittest.TestCase):
                 self.assertEqual(status, 400, data)
                 self.assertTrue(data["error"])
 
+    def test_accounts_endpoint_requires_token_and_suggests_used(self):
+        status, _, _ = self.request("GET", "/api/accounts?q=ete", token=False)
+        self.assertEqual(status, 401)
+
+        self.app.record_accounts("@ETECSA_Cuba, ana, luis")
+        self.assertTrue(self.app.accounts.exists())
+        self.assertEqual(self.app.accounts.parent, self.history.parent)
+
+        status, _, data = self.json_request("GET", "/api/accounts?q=ete")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["handle"] for item in data["accounts"]], ["ETECSA_Cuba"])
+
+        status, _, data = self.json_request("GET", "/api/accounts?q=et&exclude=ETECSA_Cuba")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["accounts"], [])
+
+        status, _, data = self.json_request("GET", "/api/accounts?limit=2")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["accounts"]), 2)
+
+    def test_preview_records_accounts_for_autocomplete(self):
+        self.preview(users="@nueva_cuenta, otra_cuenta")
+        status, _, data = self.json_request("GET", "/api/accounts?q=nueva")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["handle"] for item in data["accounts"]], ["nueva_cuenta"])
+
+        status, _, data = self.json_request("GET", "/api/accounts?q=otra")
+        self.assertEqual([item["handle"] for item in data["accounts"]], ["otra_cuenta"])
+
     def test_unknown_job_and_export(self):
         status, _, _ = self.request("GET", "/api/jobs/deadbeef")
         self.assertEqual(status, 404)

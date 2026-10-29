@@ -6,6 +6,8 @@ const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 const els = {
   form: $("#search-form"),
   users: $("#users"),
+  usersCombo: $("#users-combo"),
+  usersList: $("#users-list"),
   from: $("#from"),
   to: $("#to"),
   limit: $("#limit"),
@@ -62,6 +64,197 @@ const state = {
 };
 
 let toastTimer = null;
+
+// --- autocompletado de cuentas ---------------------------------------------
+
+const combo = {
+  items: [],
+  active: -1,
+  open: false,
+  timer: null,
+  controller: null,
+  seq: 0,
+};
+
+function currentToken(input) {
+  const value = input.value;
+  const caret = input.selectionStart ?? value.length;
+  const before = value.slice(0, caret);
+  const start = before.lastIndexOf(",") + 1;
+  let end = value.indexOf(",", caret);
+  if (end === -1) end = value.length;
+  const query = value.slice(start, end).trim().replace(/^@/, "");
+  return { start, end, query, caret };
+}
+
+function comboUsed(value, start) {
+  const out = [];
+  let offset = 0;
+  for (const part of value.split(",")) {
+    const handle = part.trim().replace(/^@/, "");
+    if (offset !== start && /^[A-Za-z0-9_]{1,15}$/.test(handle)) {
+      out.push(handle);
+    }
+    offset += part.length + 1;
+  }
+  return out;
+}
+
+function appendHighlighted(element, text, query) {
+  const needle = (query || "").toLowerCase();
+  const index = needle ? text.toLowerCase().indexOf(needle) : -1;
+  if (index < 0) {
+    element.textContent = text;
+    return;
+  }
+  element.append(text.slice(0, index));
+  const mark = document.createElement("mark");
+  mark.textContent = text.slice(index, index + needle.length);
+  element.append(mark, text.slice(index + needle.length));
+}
+
+function setComboActive(index) {
+  const options = Array.from(els.usersList.querySelectorAll(".combo-option"));
+  if (!options.length) {
+    combo.active = -1;
+    els.users.removeAttribute("aria-activedescendant");
+    return;
+  }
+  const next = Math.max(0, Math.min(index, options.length - 1));
+  combo.active = next;
+  options.forEach((option, position) => {
+    option.setAttribute("aria-selected", position === next ? "true" : "false");
+  });
+  const current = options[next];
+  els.users.setAttribute("aria-activedescendant", current.id);
+  current.scrollIntoView({ block: "nearest" });
+}
+
+function hideCombo() {
+  combo.open = false;
+  combo.active = -1;
+  combo.items = [];
+  combo.seq += 1;
+  clearTimeout(combo.timer);
+  combo.timer = null;
+  if (combo.controller) combo.controller.abort();
+  combo.controller = null;
+  els.usersList.replaceChildren();
+  els.usersList.hidden = true;
+  els.users.setAttribute("aria-expanded", "false");
+  els.users.removeAttribute("aria-activedescendant");
+}
+
+function renderCombo(items, query) {
+  const list = els.usersList;
+  list.replaceChildren();
+  combo.items = items;
+  combo.active = -1;
+
+  if (!items.length) {
+    if (query) {
+      const empty = document.createElement("li");
+      empty.className = "combo-empty";
+      empty.textContent = "Sin cuentas usadas que coincidan.";
+      list.append(empty);
+      combo.open = true;
+      list.hidden = false;
+      els.users.setAttribute("aria-expanded", "true");
+    } else {
+      hideCombo();
+    }
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach((item, index) => {
+    const option = document.createElement("li");
+    option.className = "combo-option";
+    option.id = `users-option-${index}`;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
+    option.dataset.handle = item.handle;
+
+    const name = document.createElement("strong");
+    appendHighlighted(name, "@" + item.handle, query);
+    option.append(name);
+
+    const uses = Number(item.count || 0);
+    if (uses > 1) {
+      const meta = document.createElement("small");
+      meta.textContent = `${uses} usos`;
+      option.append(meta);
+    }
+
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("mouseenter", () => setComboActive(index));
+    option.addEventListener("click", () => chooseCombo(index));
+    fragment.append(option);
+  });
+
+  list.append(fragment);
+  combo.open = true;
+  list.hidden = false;
+  els.users.setAttribute("aria-expanded", "true");
+}
+
+async function fetchCombo() {
+  if (document.activeElement !== els.users) return;
+  const token = currentToken(els.users);
+  const exclude = comboUsed(els.users.value, token.start);
+  const params = new URLSearchParams({ q: token.query, limit: "8" });
+  if (exclude.length) params.set("exclude", exclude.join(","));
+
+  if (combo.controller) combo.controller.abort();
+  combo.controller = new AbortController();
+  const seq = ++combo.seq;
+  try {
+    const response = await fetch(`/api/accounts?${params}`, {
+      signal: combo.controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (seq !== combo.seq) return;
+    if (!response.ok) {
+      hideCombo();
+      return;
+    }
+    const data = await response.json();
+    if (seq !== combo.seq) return;
+    renderCombo(data.accounts || [], token.query);
+  } catch (error) {
+    if (error.name !== "AbortError" && seq === combo.seq) hideCombo();
+  }
+}
+
+function scheduleCombo(immediate = false) {
+  clearTimeout(combo.timer);
+  if (immediate) {
+    fetchCombo();
+    return;
+  }
+  combo.timer = setTimeout(fetchCombo, 120);
+}
+
+function chooseCombo(index) {
+  const item = combo.items[index];
+  if (!item) return;
+  const value = els.users.value;
+  const token = currentToken(els.users);
+  const raw = value.slice(token.start, token.end);
+  const lead = (raw.match(/^\s*/) || [""])[0];
+  const suffix = value.slice(token.end);
+  let replacement = lead + "@" + item.handle;
+  let caret = token.start + replacement.length;
+  if (!suffix.startsWith(",")) {
+    replacement += ", ";
+    caret += 2;
+  }
+  els.users.value = value.slice(0, token.start) + replacement + suffix;
+  els.users.setSelectionRange(caret, caret);
+  hideCombo();
+  els.users.dispatchEvent(new Event("input", { bubbles: true }));
+  scheduleCombo(true);
+}
 
 function todayISO() {
   const now = new Date();
@@ -232,6 +425,7 @@ function watchJob(id, onDone, onFail) {
 
 async function runPreview(event) {
   event.preventDefault();
+  hideCombo();
   if (state.busy) return;
 
   let params;
@@ -598,6 +792,42 @@ function init() {
   els.to.addEventListener("change", invalidatePreview);
   [els.users, els.limit, els.delay, els.match, els.exclude].forEach((input) => {
     input.addEventListener("input", invalidatePreview);
+  });
+  els.users.addEventListener("input", () => scheduleCombo());
+  els.users.addEventListener("focus", () => scheduleCombo(true));
+  els.users.addEventListener("blur", () => setTimeout(hideCombo, 120));
+  els.users.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      if (!combo.open) {
+        fetchCombo().then(() => {
+          if (combo.open && combo.items.length) {
+            setComboActive(delta > 0 ? 0 : combo.items.length - 1);
+          }
+        });
+        return;
+      }
+      const total = combo.items.length;
+      if (!total) return;
+      if (combo.active < 0) {
+        setComboActive(delta > 0 ? 0 : total - 1);
+      } else {
+        setComboActive((combo.active + delta + total) % total);
+      }
+    } else if (event.key === "Enter" && combo.open && combo.active >= 0) {
+      event.preventDefault();
+      chooseCombo(combo.active);
+    } else if (event.key === "Tab" && !event.shiftKey && combo.open && combo.active >= 0) {
+      event.preventDefault();
+      chooseCombo(combo.active);
+    } else if (event.key === "Escape" && combo.open) {
+      event.preventDefault();
+      hideCombo();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!els.usersCombo.contains(event.target)) hideCombo();
   });
   $$('input[name="scope"]').forEach((radio) => {
     radio.addEventListener("change", invalidatePreview);

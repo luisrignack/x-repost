@@ -38,6 +38,13 @@ ROOT = WEB_DIR.parent
 STATIC_DIR = WEB_DIR / "static"
 DEFAULT_ENGINE = ROOT / "xrepost.sh"
 DEFAULT_RUNS = WEB_DIR / ".runs"
+
+# El motor y el archivo de cuentas viven un nivel arriba; app.py se ejecuta
+# desde web/, así que su carpeta no está en sys.path por defecto.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+import xrepost_accounts  # noqa: E402  (depende del sys.path anterior)
+
 MAX_BODY = 1_000_000
 MAX_LOG = 2_000
 MAX_JOB_SECONDS = 30 * 60
@@ -287,17 +294,40 @@ class App:
         history: Path,
         runs: Path,
         token: str,
+        accounts: Path | None = None,
         verbose: bool = False,
     ):
         self.engine = Path(engine).expanduser().resolve()
         self.history = Path(history).expanduser()
         self.runs = Path(runs).expanduser()
         self.runs.mkdir(parents=True, exist_ok=True)
+        self.accounts, _ = xrepost_accounts.resolve_paths(accounts, self.history)
         self.token = token
         self.verbose = verbose
         self.jobs: dict[str, Job] = {}
         self.current: Job | None = None
         self.lock = threading.Lock()
+
+    def suggest_accounts(
+        self,
+        query: str = "",
+        exclude: set[str] | list[str] | tuple[str, ...] = (),
+        limit: int = 8,
+    ) -> list[dict]:
+        return xrepost_accounts.suggest(
+            query,
+            accounts=self.accounts,
+            history=self.history,
+            limit=max(1, min(int(limit), 20)),
+            exclude=exclude,
+        )
+
+    def record_accounts(self, users: str) -> None:
+        """Recuerda las cuentas usadas para el autocompletado (sin romper la búsqueda)."""
+        try:
+            xrepost_accounts.add_accounts(users, self.accounts)
+        except OSError:
+            pass
 
     def start_job(self, kind: str, params: dict) -> Job:
         with self.lock:
@@ -365,6 +395,7 @@ class App:
         env.update(
             {
                 "X_HISTORY": str(self.history),
+                "X_ACCOUNTS": str(self.accounts),
                 "X_MODE": "repost",
                 "X_FORCE": "0",
                 "PYTHONUNBUFFERED": "1",
@@ -726,6 +757,21 @@ h1{{font-size:20px;margin:0 0 8px}}p{{color:#93a0bd;margin:0}}</style>
             limit = max(1, min(limit, 200))
             return self._send_json({"entries": read_history(self.application.history, limit)})
 
+        if path == "/api/accounts":
+            query = parse_qs(urlparse(self.path).query)
+            text = (query.get("q") or [""])[0].strip()
+            try:
+                limit = int((query.get("limit") or ["8"])[0])
+            except ValueError:
+                limit = 8
+            exclude = (query.get("exclude") or [""])[0]
+            items = self.application.suggest_accounts(
+                text,
+                exclude=xrepost_accounts.split_handles(exclude),
+                limit=limit,
+            )
+            return self._send_json({"accounts": items})
+
         match = re.fullmatch(r"/api/jobs/([0-9a-f]+)", path)
         if match:
             job = self.application.jobs.get(match.group(1))
@@ -754,6 +800,9 @@ h1{{font-size:20px;margin:0 0 8px}}p{{color:#93a0bd;margin:0}}</style>
     def _api_preview(self, data: dict) -> None:
         params = validate_repost_params(data, apply=False)
         params["key"] = params_key(params)
+        # Las cuentas quedan recordadas en cuanto se usan en una búsqueda,
+        # igual que en el CLI.
+        self.application.record_accounts(params["users"])
         job = self.application.start_job("preview", params)
         self._send_json({"id": job.id}, 202)
 
@@ -874,6 +923,11 @@ def main(argv: list[str] | None = None) -> int:
         default=str(default_history()),
         help="Ruta al historial JSONL.",
     )
+    parser.add_argument(
+        "--accounts",
+        default=os.environ.get("X_ACCOUNTS", ""),
+        help="Ruta de las cuentas recordadas (por defecto, junto al historial).",
+    )
     parser.add_argument("--runs", default=str(DEFAULT_RUNS), help="Carpeta de ejecuciones y exportaciones.")
     parser.add_argument("--no-open", action="store_true", help="No abrir el navegador automáticamente.")
     parser.add_argument("--verbose", action="store_true", help="Registrar cada petición HTTP.")
@@ -892,6 +946,7 @@ def main(argv: list[str] | None = None) -> int:
         engine=Path(args.engine),
         history=Path(args.history),
         runs=Path(args.runs),
+        accounts=Path(args.accounts) if args.accounts else None,
         token=token,
         verbose=args.verbose,
     )
@@ -916,6 +971,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Panel:     {url}")
     print(f"  Motor:     {app.engine}")
     print(f"  Historial: {app.history}")
+    print(f"  Cuentas:   {app.accounts}")
     print("  Solo escucha en 127.0.0.1. Ctrl-C para detener.")
     print()
 

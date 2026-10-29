@@ -34,12 +34,17 @@
       </div>
 
       <form id="search-form" autocomplete="off">
-        <label class="field">
-          <span>Cuentas</span>
-          <input id="users" name="users" type="text" placeholder="@cuenta1, @cuenta2"
-                 spellcheck="false" autocapitalize="off" required>
-          <small>Separadas por coma. La @ es opcional.</small>
-        </label>
+        <div class="field">
+          <label class="field-label" for="users">Cuentas</label>
+          <div class="combo" id="users-combo">
+            <input id="users" name="users" type="text" placeholder="@cuenta1, @cuenta2"
+                   spellcheck="false" autocapitalize="off" autocomplete="off" required
+                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   aria-controls="users-list" aria-describedby="users-help">
+            <ul id="users-list" class="combo-list" role="listbox" aria-label="Cuentas usadas antes" hidden></ul>
+          </div>
+          <small id="users-help">Separadas por coma. La @ es opcional; las cuentas usadas antes se sugieren al escribir.</small>
+        </div>
 
         <div class="grid2">
           <label class="field">
