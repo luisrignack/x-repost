@@ -13,6 +13,9 @@
 # cuentas hayan hecho de otras cuentas. Por defecto solo se consideran las
 # publicaciones originales (X_SKIP_RETWEETS=1).
 #
+# Cuentas: el modo interactivo sugiere las cuentas usadas antes mientras se
+# escribe (↑/↓ elige, Tab completa, Enter acepta). Se guardan junto al historial.
+#
 # Opciones:
 #   --csv RUTA          exportar el listado a CSV
 #   --md RUTA           exportar el listado a Markdown
@@ -30,9 +33,11 @@
 #   X_SKIP_RETWEETS=0 incluir retweets (por defecto se ignoran)
 #   X_MATCH=a,b    solo posts que contengan alguna de esas palabras
 #   X_EXCLUDE=c,d  descartar posts que contengan alguna
+#   X_ACCOUNTS=... archivo de cuentas recordadas (por defecto, junto al historial)
 #   BU_CDP_URL=... endpoint de Chrome (default http://127.0.0.1:9222)
 #
 # Historial: ~/.local/state/xrepost/history.jsonl (cambiable con X_HISTORY)
+# Cuentas:   ~/.local/state/xrepost/accounts.json  (cambiable con X_ACCOUNTS)
 
 set -euo pipefail
 
@@ -278,7 +283,14 @@ if [ "$MODE" = "repost" ]; then
     export X_TO="${X_TO:-$X_FROM}"
   else
     echo "=== xrepost ==="
-    read -r -p "Usuarios (separados por coma, @ opcional): " X_USERS || X_USERS=""
+    if [ -t 0 ] && [ -t 1 ]; then
+      if ! X_USERS="$(python3 "$SELF_DIR/xrepost_accounts.py" prompt)"; then
+        echo "Entrada cancelada." >&2
+        exit 1
+      fi
+    else
+      read -r -p "Usuarios (separados por coma, @ opcional): " X_USERS || X_USERS=""
+    fi
     if [ -z "${X_USERS// /}" ]; then
       echo "Debes indicar al menos un usuario." >&2
       exit 1
@@ -351,6 +363,11 @@ export X_FORCE="$FORCE"
 export X_CSV="$CSV"
 export X_MD="$MD"
 export BU_CDP_URL="${BU_CDP_URL:-http://127.0.0.1:9222}"
+
+# Recordar las cuentas para las próximas sugerencias (CLI y panel web).
+if [ "$MODE" = "repost" ] && [ -n "${X_USERS:-}" ]; then
+  python3 "$SELF_DIR/xrepost_accounts.py" add "$X_USERS" >/dev/null 2>&1 || true
+fi
 
 if [ "$MODE" = "repost" ] && [ "$X_APPLY" != "1" ]; then
   echo
