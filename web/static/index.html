@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>xrepost · panel local</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f5b942'/%3E%3Cpath d='M18 22h28M18 32h20M18 42h28' stroke='%230b1020' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">x</span>
+      <div>
+        <h1>xrepost <span>panel local</span></h1>
+        <p>Previsualiza y repostea desde la sesión de X que ya controla el CLI.</p>
+      </div>
+    </div>
+    <div class="chips" aria-label="Estado del entorno">
+      <span class="chip" id="chip-engine"><i class="dot"></i> Motor</span>
+      <span class="chip" id="chip-chrome"><i class="dot"></i> Chrome</span>
+      <span class="chip chip-quiet"><i class="dot"></i> Solo 127.0.0.1</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card form-card" aria-labelledby="form-title">
+      <div class="card-head">
+        <div>
+          <h2 id="form-title">Nueva búsqueda</h2>
+          <p class="muted">Mismo motor y mismas reglas que <code>./xrepost.sh</code>.</p>
+        </div>
+      </div>
+
+      <form id="search-form" autocomplete="off">
+        <label class="field">
+          <span>Cuentas</span>
+          <input id="users" name="users" type="text" placeholder="@cuenta1, @cuenta2"
+                 spellcheck="false" autocapitalize="off" required>
+          <small>Separadas por coma. La @ es opcional.</small>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span>Desde</span>
+            <input id="from" name="from" type="date" required>
+          </label>
+          <label class="field">
+            <span>Hasta</span>
+            <input id="to" name="to" type="date" required>
+          </label>
+        </div>
+
+        <fieldset class="scope">
+          <legend>Alcance de las publicaciones</legend>
+          <label class="choice">
+            <input type="radio" name="scope" value="originals" checked>
+            <span>
+              <strong>Solo publicaciones originales</strong>
+              <small>Omite los retweets que estas cuentas hayan hecho de otras cuentas.</small>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="scope" value="all">
+            <span>
+              <strong>Incluir retweets de otras cuentas</strong>
+              <small>Al repostear se abre la publicación original, no el retweet.</small>
+            </span>
+          </label>
+        </fieldset>
+
+        <details class="advanced">
+          <summary>Opciones avanzadas</summary>
+          <div class="grid2">
+            <label class="field">
+              <span>Máximo de reposts</span>
+              <input id="limit" name="limit" type="number" min="1" max="50" step="1" value="10">
+            </label>
+            <label class="field">
+              <span>Pausa entre reposts (s)</span>
+              <input id="delay" name="delay" type="number" min="5" max="300" step="1" value="20">
+            </label>
+          </div>
+          <div class="grid2">
+            <label class="field">
+              <span>Incluir palabras</span>
+              <input id="match" name="match" type="text" placeholder="kubernetes, cloud">
+            </label>
+            <label class="field">
+              <span>Excluir palabras</span>
+              <input id="exclude" name="exclude" type="text" placeholder="empleo, oferta">
+            </label>
+          </div>
+        </details>
+
+        <div class="actions">
+          <button type="submit" class="btn primary" id="preview-btn">
+            <span class="btn-label">Previsualizar</span>
+          </button>
+          <button type="button" class="btn danger" id="apply-btn" disabled>
+            Repostear…
+          </button>
+          <button type="button" class="btn ghost" id="cancel-btn" hidden>Cancelar</button>
+        </div>
+        <p class="hint">La previsualización no escribe en tu cuenta. Repostear solo se habilita después de revisar el listado y confirmar.</p>
+      </form>
+    </section>
+
+    <section class="card result-card" aria-labelledby="result-title">
+      <div class="card-head">
+        <div>
+          <h2 id="result-title">Publicaciones</h2>
+          <p class="muted" id="result-sub">Previsualiza para ver el listado.</p>
+        </div>
+        <div class="exports" id="exports" hidden>
+          <a class="btn tiny" id="export-csv" href="#" download>CSV</a>
+          <a class="btn tiny" id="export-md" href="#" download>Markdown</a>
+        </div>
+      </div>
+
+      <div class="job-panel" id="job-panel" hidden aria-live="polite">
+        <div class="job-line">
+          <span class="spinner" id="job-spinner" aria-hidden="true"></span>
+          <strong id="job-status-text">Ejecutando…</strong>
+          <span class="muted" id="job-elapsed"></span>
+          <button type="button" class="btn tiny ghost" id="job-cancel">Cancelar</button>
+        </div>
+        <details class="log-box" id="log-box">
+          <summary>Registro del motor</summary>
+          <pre id="job-log" class="log"></pre>
+        </details>
+      </div>
+
+      <div class="empty" id="empty">
+        <div class="empty-icon" aria-hidden="true">⌕</div>
+        <p>Escribe una cuenta y un rango de fechas para ver qué publicó.</p>
+        <p class="muted">Nada se repostea hasta que lo confirmes.</p>
+      </div>
+
+      <div class="table-wrap" id="table-wrap" hidden>
+        <table class="posts">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Autor</th>
+              <th>Publicación</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody id="posts-body"></tbody>
+        </table>
+      </div>
+
+      <div class="result-foot" id="result-foot" hidden>
+        <span class="muted" id="apply-note"></span>
+      </div>
+    </section>
+  </main>
+
+  <section class="card history-card" aria-labelledby="history-title">
+    <div class="card-head">
+      <div>
+        <h2 id="history-title">Historial</h2>
+        <p class="muted">Reposts y deshaceres registrados por la herramienta. Solo se deshace lo que hizo ella.</p>
+      </div>
+      <div class="actions compact">
+        <button type="button" class="btn tiny ghost" id="refresh-history">Actualizar</button>
+        <button type="button" class="btn tiny danger-ghost" id="undo-last">Deshacer última tanda</button>
+      </div>
+    </div>
+
+    <div class="empty small" id="history-empty">
+      <p>Todavía no hay movimientos registrados.</p>
+      <p class="muted">El historial se crea con el primer repost real.</p>
+    </div>
+
+    <div class="table-wrap" id="history-wrap" hidden>
+      <table class="history">
+        <thead>
+          <tr>
+            <th>Cuándo</th>
+            <th>Acción</th>
+            <th>Resultado</th>
+            <th>Cuenta</th>
+            <th>Publicación</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Confirmar reposts</h2>
+      <p>Se actuará sobre la cuenta de la sesión de Chrome. Revisa el resumen antes de continuar.</p>
+      <dl class="summary" id="confirm-summary"></dl>
+      <label class="check">
+        <input type="checkbox" id="confirm-check">
+        <span>Entiendo que se repostearán publicaciones en mi cuenta real y que puedo deshacerlo desde este panel.</span>
+      </label>
+      <div class="actions">
+        <button value="cancel" class="btn ghost" id="confirm-cancel">Cancelar</button>
+        <button type="button" class="btn danger" id="confirm-go" disabled>Repostear ahora</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="undo-dialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="undo-title">Deshacer la última tanda</h2>
+      <p id="undo-text">Se quitarán los reposts que la herramienta hizo en la última ejecución y que sigan vigentes.</p>
+      <p class="muted">No se tocan los reposts que ya estaban antes en la cuenta.</p>
+      <div class="actions">
+        <button value="cancel" class="btn ghost">Cancelar</button>
+        <button type="button" class="btn danger" id="undo-confirm">Deshacer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

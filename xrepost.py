@@ -18,6 +18,8 @@ Variables de entorno (las pone xrepost.sh):
   X_CSV     exportar el listado a CSV
   X_MD      exportar el listado a Markdown
   X_MODE    repost (default) | undo | undo_last
+  X_ONLY_URLS_FILE  JSON con el listado exacto a repostear (uso interno del
+                    panel web: evita volver a buscar entre preview y apply)
 """
 
 import csv
@@ -27,7 +29,7 @@ import re
 import sys
 import time
 import datetime as dt
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 USERS = [u.strip().lstrip("@") for u in os.environ.get("X_USERS", "").split(",") if u.strip()]
 D_FROM = os.environ.get("X_FROM", "")
@@ -147,6 +149,51 @@ def text_ok(text):
     if any(k in low for k in EXCLUDE):
         return False
     return True
+
+
+def load_selected_posts(path):
+    """Carga el listado exacto revisado en el panel web (X_ONLY_URLS_FILE).
+
+    Evita que entre la previsualización y la aplicación cambie el conjunto de
+    publicaciones: se repostea exactamente lo que el usuario vio.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"  error al leer el listado revisado: {e}")
+        return []
+    if not isinstance(data, list):
+        print("  el listado revisado no tiene el formato esperado")
+        return []
+
+    posts, seen = [], set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        parsed = urlparse(url)
+        if (
+            parsed.scheme not in ("http", "https")
+            or (parsed.hostname or "").lower()
+            not in ("x.com", "www.x.com", "twitter.com", "www.twitter.com")
+            or "/status/" not in parsed.path
+        ):
+            print(f"  aviso: URL no válida en el listado revisado: {url}")
+            continue
+        seen.add(url)
+        handle = str(item.get("usuario") or item.get("handle") or "").lstrip("@")
+        posts.append({
+            "url": url,
+            "time": str(item.get("fecha") or item.get("posted_at") or item.get("time") or ""),
+            "user": str(item.get("autor") or item.get("user") or handle),
+            "handle": handle or handle_from_url(url),
+            "text": str(item.get("texto") or item.get("text") or ""),
+            "search_user": str(item.get("search_user") or ""),
+        })
+    return posts
 
 
 # --- historial --------------------------------------------------------------
@@ -422,36 +469,50 @@ def main():
         print("faltan X_USERS o X_FROM")
         return 2
 
-    print(f"modo: {'APLICAR reposts' if APPLY else 'DRY-RUN (solo listar)'} | límite={LIMIT} | delay={DELAY}s")
-    print(
-        "alcance: "
-        + ("solo publicaciones originales" if SKIP_RETWEETS else "incluye retweets de otras cuentas")
-        + " | respuestas: "
-        + ("omitidas" if SKIP_REPLIES else "incluidas")
-    )
-    if MATCH or EXCLUDE:
-        print(f"filtros de texto: incluir={MATCH or '—'} | excluir={EXCLUDE or '—'}")
+    selected_file = os.environ.get("X_ONLY_URLS_FILE", "").strip()
 
-    found = []
-    for u in USERS:
-        try:
-            found.extend(collect(u, D_FROM, D_TO))
-        except Exception as e:
-            print(f"  error con {u}: {e}")
+    if selected_file:
+        found = load_selected_posts(selected_file)
+        print(
+            f"modo: {'APLICAR reposts' if APPLY else 'DRY-RUN (solo listar)'} "
+            f"sobre {len(found)} publicaciones revisadas | límite={LIMIT} | delay={DELAY}s"
+        )
+        print("origen: listado de la previsualización (no se vuelve a buscar en X)")
+        if not found:
+            print("\nNo hay publicaciones seleccionadas.")
+            do_export([])
+            return 2
+    else:
+        print(f"modo: {'APLICAR reposts' if APPLY else 'DRY-RUN (solo listar)'} | límite={LIMIT} | delay={DELAY}s")
+        print(
+            "alcance: "
+            + ("solo publicaciones originales" if SKIP_RETWEETS else "incluye retweets de otras cuentas")
+            + " | respuestas: "
+            + ("omitidas" if SKIP_REPLIES else "incluidas")
+        )
+        if MATCH or EXCLUDE:
+            print(f"filtros de texto: incluir={MATCH or '—'} | excluir={EXCLUDE or '—'}")
 
-    if SKIPPED_RT:
-        print(f"\n({SKIPPED_RT} retweets de otras cuentas ignorados; X_SKIP_RETWEETS=0 para incluirlos)")
-    if SKIPPED_KW:
-        print(f"({SKIPPED_KW} descartados por X_MATCH/X_EXCLUDE)")
+        found = []
+        for u in USERS:
+            try:
+                found.extend(collect(u, D_FROM, D_TO))
+            except Exception as e:
+                print(f"  error con {u}: {e}")
 
-    skipped_hist = 0
-    already = reposted_ids(load_history())
-    if already and not FORCE:
-        before = len(found)
-        found = [p for p in found if tweet_id(p.get("url", "")) not in already]
-        skipped_hist = before - len(found)
-        if skipped_hist:
-            print(f"({skipped_hist} ya reposteados en ejecuciones anteriores; usa --force para incluirlos)")
+        if SKIPPED_RT:
+            print(f"\n({SKIPPED_RT} retweets de otras cuentas ignorados; X_SKIP_RETWEETS=0 para incluirlos)")
+        if SKIPPED_KW:
+            print(f"({SKIPPED_KW} descartados por X_MATCH/X_EXCLUDE)")
+
+        skipped_hist = 0
+        already = reposted_ids(load_history())
+        if already and not FORCE:
+            before = len(found)
+            found = [p for p in found if tweet_id(p.get("url", "")) not in already]
+            skipped_hist = before - len(found)
+            if skipped_hist:
+                print(f"({skipped_hist} ya reposteados en ejecuciones anteriores; usa --force para incluirlos)")
 
     if not found:
         print("\nSin posts en ese rango.")
